@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule
+	xmlns:file="http://www.mulesoft.org/schema/mule/file"
+	xmlns:ephesoft-transact-web-services-connector-mule-4="http://www.mulesoft.org/schema/mule/ephesoft-transact-web-services-connector-mule-4"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/ephesoft-transact-web-services-connector-mule-4 http://www.mulesoft.org/schema/mule/ephesoft-transact-web-services-connector-mule-4/current/mule-ephesoft-transact-web-services-connector-mule-4.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd">
+	<http:listener-config name="HTTP_Listener_config"
+		doc:name="HTTP Listener config"
+		doc:id="28b5df06-6474-4001-9dd6-5eb233e52e08">
+		<http:listener-connection host="0.0.0.0"
+			port="8091" />
+	</http:listener-config>
+	<ephesoft-transact-web-services-connector-mule-4:config
+		name="Ephesoft_Transact_Web_Services_Config"
+		doc:name="Ephesoft Transact Web Services Config"
+		doc:id="a4e64b8c-2bf3-4664-a1c5-5d32cf5f3099">
+		<ephesoft-transact-web-services-connector-mule-4:basic-auth-connection
+			username="${ephesoft.username}" password="${ephesoft.password}"
+			baseUri="https://cmacw.demoephesoft.com/dcma" />
+	</ephesoft-transact-web-services-connector-mule-4:config>
+	<file:config name="File_Config" doc:name="File Config" doc:id="8a6b5519-e949-4d1a-8f26-f922970f4fee" >
+		<file:connection workingDir="${file.workingDir}" />
+	</file:config>
+	<flow name="mainFlow"
+		doc:id="9efc3598-f49c-4cd8-8759-4845742bece6">
+		<http:listener doc:name="Listener"
+			doc:id="c603edf4-15ae-4381-be3c-c35d8d51e74d"
+			config-ref="HTTP_Listener_config" path="/api/*" />
+		<logger level="INFO" doc:name="Logger" doc:id="c3eea281-3987-40b8-becc-aba979ecb288" message="#[output application/json --- attributes.maskedRequestPath]"/>
+		<choice doc:name="Choice" doc:id="82efbbd6-8354-4015-9b68-2c3b678f99a8" >
+			<when expression='#[(attributes.maskedRequestPath == "/OCRExtract")]'>
+				<flow-ref doc:name="OCRClassifyExtractFlow" doc:id="4dc9f2cb-ac78-438e-8588-f46e1797a8dc" name="OCRClassifyExtractFlow"/>
+			</when>
+			<otherwise>
+				<flow-ref doc:name="uploadBatchFlow" doc:id="41fd853b-ebae-4360-8a9e-7d81c96ef06d" name="uploadBatchFlow" />
+			</otherwise>
+		</choice>
+		
+	</flow>
+	<flow name="OCRClassifyExtractFlow" doc:id="35c1e804-d522-4875-99b8-ad400606e7e8" >
+		<ephesoft-transact-web-services-connector-mule-4:post-rest-v2-ocr-classify-extract doc:name="OCR Classify Extract" doc:id="0d180f4b-7b2d-440f-a049-e1075193e653" config-ref="Ephesoft_Transact_Web_Services_Config">
+			<ephesoft-transact-web-services-connector-mule-4:post-rest-v2-ocr-classify-extract-batch-class-identifier-body><![CDATA[#[payload.parts.batchClassIdentifier.content]]]></ephesoft-transact-web-services-connector-mule-4:post-rest-v2-ocr-classify-extract-batch-class-identifier-body>
+			<ephesoft-transact-web-services-connector-mule-4:post-rest-v2-ocr-classify-extract-input-file-body><![CDATA[#[output application/json
+---
+{
+    (payload.parts.inputFile.headers."Content-Disposition".filename): payload.parts.inputFile.content
+}]]]></ephesoft-transact-web-services-connector-mule-4:post-rest-v2-ocr-classify-extract-input-file-body>
+		</ephesoft-transact-web-services-connector-mule-4:post-rest-v2-ocr-classify-extract>
+		<ee:transform doc:name="extractResponse" doc:id="7077b0c1-6389-438a-a482-cc145c703a6a">
+			<ee:message>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="newPayload" ><![CDATA[%dw 2.0
+output application/json
+---
+payload.DocumentLevelField map(item, idx)-> {
+    (item.Name): item.Value
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="transformToCSV" doc:id="24ed24c8-f8bd-4258-9d88-4849693bfbe4" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="toCSV" ><![CDATA[%dw 2.0
+output application/csv
+var result = {(vars.newPayload map ((item, index) -> {
+  (item)
+}))} 
+---
+{
+    vendorName: result.VendorName,
+    poNumber: result.PO_Number,
+    invoiceNumber: result.InvoiceNumber,
+    invoiceDate: result.InvoiceDate,
+    subtotal: result.SubTotal as Number {format: "##,###.##"} as Number,
+    amount: result.Amount as Number {format: "##,###.##"} as Number,
+
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="a0c95194-fc9b-4e29-901a-e233d3b59f23" message="#[vars.toCSV]" />
+		<file:write doc:name="Write" doc:id="e7fbc29b-6001-4502-9425-c88581269b58" config-ref="File_Config" path="${fileWorkingDir}\invoiceList.csv" createParentDirectories="false">
+			<file:content ><![CDATA[#[vars.toCSV]]]></file:content>
+		</file:write>
+	</flow>
+	<flow name="uploadBatchFlow" doc:id="a7ea210f-097b-4c43-9b87-51bc265812af" >
+		<!-- <ephesoft-transact-web-services-connector-mule-4:get-rest-v3-batch-instances-batch-instance-id doc:name="Get Batch Instance" doc:id="e592b3ba-0904-4885-98e8-2433710f3be0" config-ref="Ephesoft_Transact_Web_Services_Config" batchInstanceIdUriParam="#[attributes.queryParams.batchInstanceId]"/> -->
+		<ephesoft-transact-web-services-connector-mule-4:post-rest-upload-batch-batch-class-identifier-batch-instance-name doc:name="Upload Batch" doc:id="85ea07e5-b7a6-402b-a85d-ab79a0c37032" config-ref="Ephesoft_Transact_Web_Services_Config" batchClassIdentifierUriParam="#[attributes.queryParams.batchClassIdentifier]" batchInstanceNameUriParam="#[attributes.queryParams.batchInstanceName]">
+			<ephesoft-transact-web-services-connector-mule-4:post-rest-upload-batch-batch-class-identifier-batch-instance-name-input-files-bodies ><![CDATA[#[output application/json
+---
+
+payload.parts pluck ((value, key, index) -> 
+{
+    (value.headers."Content-Disposition".filename) : value.content
+})]]]></ephesoft-transact-web-services-connector-mule-4:post-rest-upload-batch-batch-class-identifier-batch-instance-name-input-files-bodies>
+		</ephesoft-transact-web-services-connector-mule-4:post-rest-upload-batch-batch-class-identifier-batch-instance-name>
+		<logger level="INFO" doc:name="Logger" doc:id="54a8c941-7bda-4bbd-a675-fd16e7d9d7c6" message="#[payload]" />
+	</flow>
+	<flow name="callbackUploadBatchFLow" doc:id="37687f06-ea3f-48a8-b70b-5170cb9f4dba" >
+		<http:listener doc:name="Listener" doc:id="8783895c-5482-455f-a569-26f4e8c1d3cb" config-ref="HTTP_Listener_config" path="/callback"/>
+		<ee:transform doc:name="Transform Payload" doc:id="3dae6a7e-6871-4365-9e2a-5a9bb7a9b61a" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/dw
+---
+payload]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<ee:transform doc:name="Extract Files from Payload" doc:id="59e320c5-4f79-48e2-abad-0b02dcac89f5" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+        <ee:set-variable variableName="directoryName" ><![CDATA[payload.parts.batchInstance.content as String]]></ee:set-variable>
+        <ee:set-variable variableName="fileArrray" ><![CDATA[%dw 2.0
+import * from dw::core::Binaries
+output application/json
+var uploadedFiles = payload.parts filterObject ((value, key, index) -> key as String != "batchInstance")    
+---
+uploadedFiles pluck ((value, key, index) -> {
+    "fileName": (key),
+    "content": toBase64(value.content)
+})]]></ee:set-variable>
+      </ee:variables>
+		</ee:transform>
+		<foreach doc:name="For Each" doc:id="c7baae97-1926-46a0-94fe-69a983ba0c4b" collection="#[vars.fileArrray]">
+      <ee:transform doc:name="Set File Variables" doc:id="9e22c740-35e1-4dce-9948-d8bd8e160a59">
+        <ee:message>
+        </ee:message>
+        <ee:variables >
+          <ee:set-variable variableName="fileContent" ><![CDATA[%dw 2.0
+import * from dw::core::Binaries
+output application/octet-stream
+---
+fromBase64(payload.content) as Binary]]></ee:set-variable>
+          <ee:set-variable variableName="filePath" ><![CDATA[%dw 2.0
+output text/plain
+---
+(p('fileWorkingDir') ++ (vars.directoryName as String) ++ '\\' ++ (payload.fileName as String))]]></ee:set-variable>
+        </ee:variables>
+      </ee:transform>
+      <file:write doc:name="Write Files to Local Disk" doc:id="21523fe6-d333-44fc-91da-1cb602e0fe9a" config-ref="File_Config" path="#[vars.filePath]">
+        <file:content ><![CDATA[#[vars.fileContent]]]></file:content>
+      </file:write>
+    </foreach>
+		<logger level="INFO" doc:name="Response" doc:id="541096f9-7992-4347-957c-2c79b582374e" message="#[payload]"/>
+		<logger level="INFO" doc:name="End of Callback flow" doc:id="38ff0104-b8bd-4df3-bc79-3f9759a8555c" message='#["End of callback upload batch flow"]'/>
+	</flow>
+</mule>
